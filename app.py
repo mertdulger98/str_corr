@@ -12,7 +12,10 @@ st.set_page_config(page_title="BIST Analysis App", layout="wide")
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Sayfa Seçiniz:", ["BIST Data Analysis", "MSCI Para Akışı Analizi"])
+page = st.sidebar.radio(
+    "Sayfa Seçiniz:",
+    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "Sektörel Analiz"]
+)
 
 # Page 1: BIST Data Analysis (from app.py)
 if page == "BIST Data Analysis":
@@ -88,7 +91,7 @@ if page == "BIST Data Analysis":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# Page 2: MSCI Para Akışı Analizi (from demo.py)
+    # Page 2: MSCI Para Akışı Analizi (from demo.py)
 elif page == "MSCI Para Akışı Analizi":
     st.title("📊 MSCI Para Akış Sinyal Terminali")
 
@@ -198,3 +201,114 @@ elif page == "MSCI Para Akışı Analizi":
             Analiz için aşağıdaki 'Analiz Et' butonuna tıklayın.
             '''
         )
+
+# Page 3: Sektörel Analiz
+elif page == "Sektörel Analiz":
+    st.title("📊 MSCI Turkey Sektörel Analiz")
+
+    st.write(
+        """
+        Bu sayfa seçili hisseler üzerinden **sektörel para giriş hızını** analiz eder.
+
+        - Son 1 ay verisi kullanılır.
+        - 5 günlük fiyat getirisi ve 20 günlük ortalama hacim baz alınır.
+        - Sektör skoru = Haftalık Getiri % x Hacim Gücü
+        """
+    )
+
+    # 1. Sektörel Gruplandırma
+    sektor_haritasi = {
+    'PETKM.IS': 'İşlenebilen endüstriler',
+    'SASA.IS': 'İşlenebilen endüstriler',
+    'GUBRF.IS': 'İşlenebilen endüstriler',
+
+    'TCELL.IS': 'İletişim',
+    'TTKOM.IS': 'İletişim',
+
+    'ASTOR.IS': 'Üretici imalatı',
+
+    'TAVHL.IS': 'Taşımacılık',
+    'PGSUS.IS': 'Taşımacılık',
+    'THYAO.IS': 'Taşımacılık',
+
+    'BIMAS.IS': 'Perakende satış',
+    'MGROS.IS': 'Perakende satış',
+
+    'AKBNK.IS': 'Finans',
+    'SAHOL.IS': 'Finans',
+    'DSTKF.IS': 'Finans',
+    'EKGYO.IS': 'Finans',
+    'YKBNK.IS': 'Finans',
+    'GARAN.IS': 'Finans',
+    'ISCTR.IS': 'Finans',
+
+    'EREGL.IS': 'Enerji-dışı mineraller',
+    'TRALT.IS': 'Enerji-dışı mineraller',
+    'KRDMD.IS': 'Enerji-dışı mineraller',
+
+    'TUPRS.IS': 'Enerji mineralleri',
+    'KCHOL.IS': 'Enerji mineralleri',
+
+    'ENKAI.IS': 'Endüstriyel hizmetler',
+
+    'ASELS.IS': 'Elektronik teknoloji',
+
+    'SISE.IS': 'Dayanıklı tüketim malları',
+    'TOASO.IS': 'Dayanıklı tüketim malları',
+    'FROTO.IS': 'Dayanıklı tüketim malları',
+
+    'AEFES.IS': 'Dayanıklı olmayan tüketici ürünleri',
+    'ULKER.IS': 'Dayanıklı olmayan tüketici ürünleri'
+    }
+
+    hisseler = list(sektor_haritasi.keys())
+
+    if st.button("Sektörel Analizi Çalıştır"):
+        with st.spinner("Sektörel trendler hesaplanıyor..."):
+            try:
+                # Veri çekimi
+                data = yf.download(hisseler, period="1mo")
+
+                if data.empty:
+                    st.warning("Veri çekilemedi. Lütfen daha sonra tekrar deneyin.")
+                else:
+                    # 2. Getiri ve Hacim Hesaplama
+                    returns = data['Close'].pct_change(5).iloc[-1] * 100
+                    volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
+
+                    # 3. Verileri Birleştirme
+                    df = pd.DataFrame({
+                        'Hisse': returns.index,
+                        'Sektör': [sektor_haritasi[h] for h in returns.index],
+                        'Haftalık Getiri %': returns.values,
+                        'Hacim Gücü': volumes.values
+                    })
+
+                    # 4. Sektörel Ortalama Hesaplama (Ağırlıklı Güç)
+                    df['Sektör Skoru'] = df['Haftalık Getiri %'] * df['Hacim Gücü']
+                    sektor_ozet = df.groupby('Sektör')['Sektör Skoru'].mean().sort_values(ascending=False)
+
+                    st.subheader("Sektörel Güç Sıralaması (Para Nereye Gidiyor?)")
+                    st.dataframe(
+                        sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'}),
+                        use_container_width=True
+                    )
+
+                    # 5. Görselleştirme (Barplot)
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    sns.barplot(
+                        x=sektor_ozet.values,
+                        y=sektor_ozet.index,
+                        palette='RdYlGn',
+                        ax=ax
+                    )
+                    ax.set_title('MSCI Turkey Sektörel Para Giriş Hızı')
+                    ax.set_xlabel('Güç Skoru (Fiyat x Hacim)')
+                    ax.grid(axis='x', linestyle='--', alpha=0.7)
+                    st.pyplot(fig)
+
+                    # Detaylı hisse tablosu
+                    st.subheader("Hisse Bazında Detaylı Veriler")
+                    st.dataframe(df.sort_values('Sektör Skoru', ascending=False), use_container_width=True)
+            except Exception as e:
+                st.error(f"Sektörel analiz sırasında bir hata oluştu: {e}")
