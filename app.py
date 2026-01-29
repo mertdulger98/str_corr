@@ -14,7 +14,7 @@ st.set_page_config(page_title="BIST Analysis App", layout="wide")
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Sayfa Seçiniz:",
-    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "Sektörel Analiz"]
+    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "Sektörel Analiz", "BIST30 Correlation"]
 )
 
 # Page 1: BIST Data Analysis (from app.py)
@@ -312,3 +312,138 @@ elif page == "Sektörel Analiz":
                     st.dataframe(df.sort_values('Sektör Skoru', ascending=False), use_container_width=True)
             except Exception as e:
                 st.error(f"Sektörel analiz sırasında bir hata oluştu: {e}")
+
+# Page 4: BIST30 Correlation
+elif page == "BIST30 Correlation":
+    st.title("BIST30 Correlation")
+
+    # Sektör haritasından hisse listesini al
+    tickers = [
+        'PETKM.IS',
+        'SASA.IS',
+        'GUBRF.IS',
+        'TCELL.IS',
+        'TTKOM.IS',
+        'ASTOR.IS',
+        'TAVHL.IS',
+        'PGSUS.IS',
+        'THYAO.IS',
+        'BIMAS.IS',
+        'MGROS.IS',
+        'AKBNK.IS',
+        'SAHOL.IS',
+        'DSTKF.IS',
+        'EKGYO.IS',
+        'YKBNK.IS',
+        'GARAN.IS',
+        'ISCTR.IS',
+        'EREGL.IS',
+        'TRALT.IS',
+        'KRDMD.IS',
+        'TUPRS.IS',
+        'KCHOL.IS',
+        'ENKAI.IS',
+        'ASELS.IS',
+        'SISE.IS',
+        'TOASO.IS',
+        'FROTO.IS',
+        'AEFES.IS',
+        'ULKER.IS'
+    ]
+
+
+    # First dropdown: Period selection
+    period_options = ["3d", "7d", "1mo", "1y"]
+    selected_period = st.selectbox(
+        "Dönem Seçiniz:",
+        options=period_options,
+        index=0
+    )
+    # Add a selectbox to choose between Close (Kapanis) and Volume (Hacim)
+    column_options = {"Kapanis": "Close", "Hacim": "Volume"}
+    selected_column_label = st.selectbox(
+        "Veri Türü Seçiniz:",  # Select Data Type
+        options=list(column_options.keys()),
+        index=0
+    )
+    selected_column = column_options[selected_column_label]
+
+    # Determine interval based on period (not shown to user)
+    if selected_period in ["3d", "7d"]:
+        selected_interval = "1h"
+    else:  # 1mo or 1y
+        selected_interval = "1d"
+
+    bt1 = st.button("Analizi Çalıştır", key="run_analysis_bist30")
+
+    # Initialize sort preference in session state
+    if 'sort_preference' not in st.session_state:
+        st.session_state.sort_preference = 'alphabetical'
+
+    if bt1:
+        ticks = {}
+        for tick in tickers:
+            try:
+                df = yf.Ticker(tick).history(period=selected_period, interval=selected_interval)
+                ticks[tick] = df[selected_column]
+                time.sleep(1)  # prevent throttling
+            except Exception as e:
+                print(f"{tick} failed: {e}")
+
+        close_df = pd.DataFrame(ticks)
+        close_df = close_df.loc[~(close_df == 0).all(axis=1)]
+
+        returns = close_df.pct_change().dropna()
+
+        corr_matrix = returns.corr()
+        corr = returns.corr()
+
+        # Create list of correlation pairs
+        correlation_pairs = []
+        for i in range(len(corr.columns)):
+            for j in range(i + 1, len(corr.columns)):
+                stock1 = corr.columns[i]
+                stock2 = corr.columns[j]
+                # Sort pair alphabetically
+                pair = tuple(sorted([stock1, stock2]))
+                correlation_value = corr.iloc[i, j]
+                correlation_pairs.append((pair[0], pair[1], correlation_value))
+        
+        # Create DataFrame for display and store in session state
+        pairs_df = pd.DataFrame(correlation_pairs, columns=['Stock 1', 'Stock 2', 'Correlation'])
+        pairs_df['Correlation'] = pairs_df['Correlation'].round(4)
+        st.session_state.pairs_df = pairs_df
+    
+    # Check if data exists in session state
+    if 'pairs_df' in st.session_state and st.session_state.pairs_df is not None:
+        pairs_df = st.session_state.pairs_df
+        
+        # Sorting buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Alfabetik Sıra", key="sort_alpha"):
+                st.session_state.sort_preference = 'alphabetical'
+        with col2:
+            if st.button("Korelasyon Değeri", key="sort_corr"):
+                st.session_state.sort_preference = 'correlation'
+        
+        # Apply sorting based on preference
+        if st.session_state.sort_preference == 'alphabetical':
+            pairs_df_sorted = pairs_df.sort_values(by=['Stock 1', 'Stock 2'], ascending=True).reset_index(drop=True)
+        else:  # correlation
+            pairs_df_sorted = pairs_df.sort_values(by='Correlation', ascending=False).reset_index(drop=True)
+        
+        # Display the correlation pairs
+        st.subheader(f"BIST30 Correlation Pairs ({selected_column_label}-{selected_period})")
+        st.dataframe(pairs_df_sorted, use_container_width=True, height=600)
+
+        excel_buffer = io.BytesIO()
+        pairs_df_sorted.to_excel(excel_buffer, index=False, engine="openpyxl")
+        excel_buffer.seek(0)
+
+        st.download_button(
+            label="Korelasyon Çiftleri Excel İndir",
+            data=excel_buffer,
+            file_name=f"BIST30_{selected_column_label}_correlation_pairs.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
