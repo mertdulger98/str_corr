@@ -419,19 +419,24 @@ elif page == "BIST30 Correlation":
         pairs_df = st.session_state.pairs_df
         
         # Sorting buttons
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             if st.button("Alfabetik Sıra", key="sort_alpha"):
                 st.session_state.sort_preference = 'alphabetical'
         with col2:
-            if st.button("Korelasyon Değeri", key="sort_corr"):
-                st.session_state.sort_preference = 'correlation'
+            if st.button("Correlation Yuksek", key="sort_corr_high"):
+                st.session_state.sort_preference = 'correlation_desc'
+        with col3:
+            if st.button("Correlation Dusuk", key="sort_corr_low"):
+                st.session_state.sort_preference = 'correlation_asc'
         
         # Apply sorting based on preference
         if st.session_state.sort_preference == 'alphabetical':
             pairs_df_sorted = pairs_df.sort_values(by=['Stock 1', 'Stock 2'], ascending=True).reset_index(drop=True)
-        else:  # correlation
+        elif st.session_state.sort_preference == 'correlation_desc':
             pairs_df_sorted = pairs_df.sort_values(by='Correlation', ascending=False).reset_index(drop=True)
+        else:  # correlation_asc
+            pairs_df_sorted = pairs_df.sort_values(by='Correlation', ascending=True).reset_index(drop=True)
         
         # Display the correlation pairs
         st.subheader(f"BIST30 Correlation Pairs ({selected_column_label}-{selected_period})")
