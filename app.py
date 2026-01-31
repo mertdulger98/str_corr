@@ -429,12 +429,32 @@ elif page == "Sektörel Analiz":
                     # 4. Sektörel Ortalama Hesaplama (Ağırlıklı Güç)
                     df['Sektör Skoru'] = df['Haftalık Getiri %'] * df['Hacim Gücü']
                     sektor_ozet = df.groupby('Sektör')['Sektör Skoru'].mean().sort_values(ascending=False)
+                    
+                    # Store data in session state for Excel download
+                    sektor_ozet_df = sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'})
+                    df_sorted = df.sort_values('Sektör Skoru', ascending=False)
+                    st.session_state.sektor_ozet_df = sektor_ozet_df
+                    st.session_state.sektor_detay_df = df_sorted
 
                     st.subheader("Sektörel Güç Sıralaması (Para Nereye Gidiyor?)")
                     st.dataframe(
-                        sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'}),
+                        sektor_ozet_df,
                         use_container_width=True
                     )
+                    
+                    # Download sector summary button
+                    if 'sektor_ozet_df' in st.session_state:
+                        excel_buffer_ozet = io.BytesIO()
+                        st.session_state.sektor_ozet_df.to_excel(excel_buffer_ozet, index=False, engine='openpyxl')
+                        excel_buffer_ozet.seek(0)
+                        
+                        st.download_button(
+                            label="Sektörel Özet Excel İndir",
+                            data=excel_buffer_ozet,
+                            file_name=f"sektorel_ozet_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key="download_ozet"
+                        )
 
                     # 5. Görselleştirme (Barplot)
                     fig, ax = plt.subplots(figsize=(10, 6))
@@ -451,7 +471,21 @@ elif page == "Sektörel Analiz":
 
                     # Detaylı hisse tablosu
                     st.subheader("Hisse Bazında Detaylı Veriler")
-                    st.dataframe(df.sort_values('Sektör Skoru', ascending=False), use_container_width=True)
+                    st.dataframe(df_sorted, use_container_width=True)
+                    
+                    # Download detailed stock data button
+                    if 'sektor_detay_df' in st.session_state:
+                        excel_buffer_detay = io.BytesIO()
+                        st.session_state.sektor_detay_df.to_excel(excel_buffer_detay, index=False, engine='openpyxl')
+                        excel_buffer_detay.seek(0)
+                        
+                        st.download_button(
+                            label="Hisse Detayları Excel İndir",
+                            data=excel_buffer_detay,
+                            file_name=f"sektorel_detay_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key="download_detay"
+                        )
             except Exception as e:
                 st.error(f"Sektörel analiz sırasında bir hata oluştu: {e}")
 
