@@ -14,7 +14,7 @@ st.set_page_config(page_title="BIST Analysis App", layout="wide")
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Sayfa Seçiniz:",
-    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Correlation"]
+    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation"]
 )
 
 # Page 1: BIST Data Analysis (from app.py)
@@ -489,7 +489,77 @@ elif page == "Sektörel Analiz":
             except Exception as e:
                 st.error(f"Sektörel analiz sırasında bir hata oluştu: {e}")
 
-# Page 5: BIST30 Correlation
+# Page 5: BIST30 Hacim Analizi
+elif page == "BIST30 Hacim Analizi":
+    st.title("📊 BIST30 Hacim Analizi")
+
+    st.write(
+        """
+        Bu sayfa BIST30 hisseleri için **haftalık getiri ve hacim gücü** analizi yapar.
+
+        - Son 1 ay verisi kullanılır.
+        - 5 günlük fiyat getirisi ve 20 günlük ortalama hacim baz alınır.
+        - Veriler Hacim Gücü'ne göre azalan sırada gösterilir.
+        """
+    )
+
+    # BIST30 hisse listesi
+    hisseler = [
+        'PETKM.IS', 'SASA.IS', 'GUBRF.IS', 'TCELL.IS', 'TTKOM.IS',
+        'ASTOR.IS', 'TAVHL.IS', 'PGSUS.IS', 'THYAO.IS', 'BIMAS.IS',
+        'MGROS.IS', 'AKBNK.IS', 'SAHOL.IS', 'DSTKF.IS', 'EKGYO.IS',
+        'YKBNK.IS', 'GARAN.IS', 'ISCTR.IS', 'EREGL.IS', 'TRALT.IS',
+        'KRDMD.IS', 'TUPRS.IS', 'KCHOL.IS', 'ENKAI.IS', 'ASELS.IS',
+        'SISE.IS', 'TOASO.IS', 'FROTO.IS', 'AEFES.IS', 'ULKER.IS'
+    ]
+
+    if st.button("Hacim Analizini Çalıştır"):
+        with st.spinner("Hacim analizi hesaplanıyor..."):
+            try:
+                # Veri çekimi
+                data = yf.download(hisseler, period="1mo")
+
+                if data.empty:
+                    st.warning("Veri çekilemedi. Lütfen daha sonra tekrar deneyin.")
+                else:
+                    # Getiri ve Hacim Hesaplama
+                    returns = data['Close'].pct_change(5).iloc[-1] * 100
+                    volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
+
+                    # Verileri Birleştirme (Sektör sütunu olmadan)
+                    df = pd.DataFrame({
+                        'Hisse': returns.index,
+                        'Haftalık Getiri %': returns.values,
+                        'Hacim Gücü': volumes.values
+                    })
+
+                    # Hacim Gücü'ne göre azalan sırada sırala
+                    df_sorted = df.sort_values('Hacim Gücü', ascending=False).reset_index(drop=True)
+                    
+                    # Store data in session state for Excel download
+                    st.session_state.hacim_analiz_df = df_sorted
+
+                    # Hisse tablosu
+                    st.subheader("BIST30 Hisse Detayları (Hacim Gücü Sıralaması)")
+                    st.dataframe(df_sorted, use_container_width=True)
+                    
+                    # Download button
+                    if 'hacim_analiz_df' in st.session_state:
+                        excel_buffer = io.BytesIO()
+                        st.session_state.hacim_analiz_df.to_excel(excel_buffer, index=False, engine='openpyxl')
+                        excel_buffer.seek(0)
+                        
+                        st.download_button(
+                            label="Hisse Detayları Excel İndir",
+                            data=excel_buffer,
+                            file_name=f"bist30_hacim_analizi_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key="download_hacim"
+                        )
+            except Exception as e:
+                st.error(f"Hacim analizi sırasında bir hata oluştu: {e}")
+
+# Page 6: BIST30 Correlation
 elif page == "BIST30 Correlation":
     st.title("BIST30 Correlation")
 
