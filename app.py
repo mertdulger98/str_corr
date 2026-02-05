@@ -525,13 +525,18 @@ elif page == "BIST30 Hacim Analizi":
                     # Getiri ve Hacim Hesaplama
                     returns = data['Close'].pct_change(5).iloc[-1] * 100
                     volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
+                    current_prices = data['Close'].iloc[-1]
 
                     # Verileri Birleştirme (Sektör sütunu olmadan)
                     df = pd.DataFrame({
                         'Hisse': returns.index,
+                        'Güncel Fiyat': current_prices.values,
                         'Haftalık Getiri %': returns.values,
                         'Hacim Gücü': volumes.values
                     })
+                    
+                    # Round the price column
+                    df['Güncel Fiyat'] = df['Güncel Fiyat'].round(2)
 
                     # Hacim Gücü'ne göre azalan sırada sırala
                     df_sorted = df.sort_values('Hacim Gücü', ascending=False).reset_index(drop=True)
