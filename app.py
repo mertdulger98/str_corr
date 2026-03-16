@@ -97,7 +97,7 @@ st.set_page_config(page_title="BIST Analysis App", layout="wide")
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Sayfa Seçiniz:",
-    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation", "Bist30-Full", "Kontrat-Tum"]
+    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation", "Bist30-Full", "Kontrat-Tum", "Euro", "Gold"]
 )
 
 # Page 1: BIST Data Analysis (from app.py)
@@ -1511,3 +1511,110 @@ elif page == "Kontrat-Tum":
                     mime='application/json',
                     key="download_json_kontrat"
                 )
+
+# Page 8: Euro
+elif page == "Euro":
+    st.title("💶 Euro (EURUSD=X) Tarihsel Veri")
+    st.write("Bu sayfada Euro / Dolar paritesinin geçmiş verilerini çekebilir; Excel ve JSON olarak indirebilirsiniz.")
+
+    zaman_araligi = st.selectbox("Zaman Aralığı Seçiniz:", ["1H", "1D"])
+    
+    if st.button("Verileri Getir"):
+        with st.spinner("Euro verileri indiriliyor..."):
+            interval = "1h" if zaman_araligi == "1H" else "1d"
+            # yfinance limits 1h interval to max 730 days
+            period = "3mo" if zaman_araligi == "1H" else "1y"
+            
+            ticker = yf.Ticker("EURUSD=X")
+            df = ticker.history(period=period, interval=interval, auto_adjust=True)
+            df = df.drop(columns=['Volume','Dividends', 'Stock Splits'])
+            
+            if df.empty:
+                st.warning("Seçilen aralıkta veri bulunamadı.")
+            else:
+                df.reset_index(inplace=True)
+                # Remove timezone info for excel export
+                if 'Datetime' in df.columns:
+                    df['Datetime'] = df['Datetime'].dt.tz_localize(None)
+                if 'Date' in df.columns:
+                    df['Date'] = df['Date'].dt.tz_localize(None)
+                
+                st.dataframe(df, use_container_width=True)
+                
+                # Excel
+                excel_buffer = io.BytesIO()
+                df.to_excel(excel_buffer, index=False, engine='openpyxl')
+                excel_buffer.seek(0)
+                
+                # JSON
+                json_str = df.to_json(orient='records', date_format='iso')
+                json_bytes = json_str.encode('utf-8')
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        label="📥 Excel Olarak İndir",
+                        data=excel_buffer.getvalue(),
+                        file_name=f"EURUSD_{zaman_araligi}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                with col2:
+                    st.download_button(
+                        label="📄 JSON Olarak İndir",
+                        data=json_bytes,
+                        file_name=f"EURUSD_{zaman_araligi}.json",
+                        mime="application/json"
+                    )
+
+# Page 9: Gold
+elif page == "Gold":
+    st.title("🥇 Altın (GC=F) Tarihsel Veri")
+    st.write("Bu sayfada Altın kontratlarının (GC=F) geçmiş verilerini çekebilir; Excel ve JSON olarak indirebilirsiniz.")
+
+    zaman_araligi = st.selectbox("Zaman Aralığı Seçiniz:", ["1H", "1D"])
+    
+    if st.button("Verileri Getir"):
+        with st.spinner("Altın verileri indiriliyor..."):
+            interval = "1h" if zaman_araligi == "1H" else "1d"
+            period = "3mo" if zaman_araligi == "1H" else "1y"
+            
+            ticker = yf.Ticker("GC=F")
+            df = ticker.history(period=period, interval=interval, auto_adjust=True)
+            df = df.drop(columns=['Volume','Dividends', 'Stock Splits'])
+            
+            if df.empty:
+                st.warning("Seçilen aralıkta veri bulunamadı.")
+            else:
+                df.reset_index(inplace=True)
+                # Remove timezone info for excel export
+                if 'Datetime' in df.columns:
+                    df['Datetime'] = df['Datetime'].dt.tz_localize(None)
+                if 'Date' in df.columns:
+                    df['Date'] = df['Date'].dt.tz_localize(None)
+                
+                st.dataframe(df, use_container_width=True)
+                
+                # Excel
+                excel_buffer = io.BytesIO()
+                df.to_excel(excel_buffer, index=False, engine='openpyxl')
+                excel_buffer.seek(0)
+                
+                # JSON
+                json_str = df.to_json(orient='records', date_format='iso')
+                json_bytes = json_str.encode('utf-8')
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        label="📥 Excel Olarak İndir",
+                        data=excel_buffer.getvalue(),
+                        file_name=f"Gold_{zaman_araligi}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                with col2:
+                    st.download_button(
+                        label="📄 JSON Olarak İndir",
+                        data=json_bytes,
+                        file_name=f"Gold_{zaman_araligi}.json",
+                        mime="application/json"
+                    )
