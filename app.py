@@ -129,7 +129,7 @@ if page == "BIST Data Analysis":
     bt1 = st.button("Analizi Çalıştır", key="run_analysis")
 
     if bt1:
-        tickers = ["FROTO.IS", "BIMAS.IS", "ASELS.IS", "AKBNK.IS","TUPRS.IS","THYAO.IS","TCELL.IS","YKBNK.IS","ISCTR.IS","SAHOL.IS","KCHOL.IS"]
+        tickers = ["FROTO.IS", "BIMAS.IS", "ASELS.IS", "AKBNK.IS","TUPRS.IS","THYAO.IS","TCELL.IS","YKBNK.IS","ISCTR.IS","SAHOL.IS","KCHOL.IS","TOASO.IS","SISE.IS"]
         with st.spinner("Veriler indiriliyor..."):
             close_df = download_selected_column(
                 tickers,
@@ -184,7 +184,7 @@ elif page == "MSCI Para Akışı Analizi":
     st.title("📊 MSCI Para Akış Sinyal Terminali")
 
     # Hisse listesi - DÜZENLEME YOK
-    hisseler = ['ASELS.IS', 'BIMAS.IS', 'AKBNK.IS', 'TUPRS.IS', 'KCHOL.IS', 'THYAO.IS', 'TCELL.IS','ISCTR.IS','YKBNK.IS','FROTO.IS']
+    hisseler = ['ASELS.IS', 'BIMAS.IS', 'AKBNK.IS', 'TUPRS.IS', 'KCHOL.IS', 'THYAO.IS', 'TCELL.IS','ISCTR.IS','YKBNK.IS','FROTO.IS','TOASO.IS','SISE.IS']
 
     # Kullanıcıdan seçim ALMA, hep tüm hisseler analiz edilir
     secili_hisseler = hisseler
