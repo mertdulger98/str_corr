@@ -129,7 +129,7 @@ if page == "BIST Data Analysis":
     bt1 = st.button("Analizi Çalıştır", key="run_analysis")
 
     if bt1:
-        tickers = ["FROTO.IS", "BIMAS.IS", "ASELS.IS", "AKBNK.IS","TUPRS.IS","THYAO.IS","TCELL.IS","YKBNK.IS","ISCTR.IS","SAHOL.IS","KCHOL.IS","TOASO.IS","SISE.IS"]
+        tickers = ["FROTO.IS", "BIMAS.IS", "ASELS.IS", "AKBNK.IS","TUPRS.IS","THYAO.IS","TCELL.IS","YKBNK.IS","ISCTR.IS","SAHOL.IS","KCHOL.IS","TOASO.IS","SISE.IS",'EREGL.IS']
         with st.spinner("Veriler indiriliyor..."):
             close_df = download_selected_column(
                 tickers,
