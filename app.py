@@ -184,7 +184,7 @@ elif page == "MSCI Para Akışı Analizi":
     st.title("📊 MSCI Para Akış Sinyal Terminali")
 
     # Hisse listesi - DÜZENLEME YOK
-    hisseler = ['ASELS.IS', 'BIMAS.IS', 'AKBNK.IS', 'TUPRS.IS', 'KCHOL.IS', 'THYAO.IS', 'TCELL.IS','ISCTR.IS','YKBNK.IS','FROTO.IS','TOASO.IS','SISE.IS']
+    hisseler = ['ASELS.IS', 'BIMAS.IS', 'AKBNK.IS', 'TUPRS.IS', 'KCHOL.IS', 'THYAO.IS', 'TCELL.IS','ISCTR.IS','YKBNK.IS','FROTO.IS','TOASO.IS','SISE.IS','EREGL.IS']
 
     # Kullanıcıdan seçim ALMA, hep tüm hisseler analiz edilir
     secili_hisseler = hisseler
@@ -216,22 +216,49 @@ elif page == "MSCI Para Akışı Analizi":
 
     def analiz_yap(hisse_listesi):
         analiz_listesi = []
+
+        # Bulk download all tickers in a single API call with retries
+        data = None
+        for attempt in range(3):
+            try:
+                data = yf.download(
+                    hisse_listesi,
+                    period="1mo",
+                    auto_adjust=True,
+                    threads=False,
+                    progress=False,
+                    timeout=20,
+                )
+                if data is not None and not data.empty:
+                    break
+            except Exception:
+                data = None
+            time.sleep(2 * (attempt + 1))
+
+        if data is None or data.empty or 'Close' not in data.columns or 'Volume' not in data.columns:
+            return analiz_listesi
+
+        close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+        volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
         rapor_progress = st.progress(0, text="Analiz başlatılıyor...")
         toplam = len(hisse_listesi)
         for idx, hisse in enumerate(hisse_listesi, 1):
             rapor_progress.progress(idx / toplam, text=f"{hisse} işleniyor ({idx}/{toplam})...")
-            hisse_df = hisse_verisi_cek(hisse)
-            if hisse_df is None:
+            if hisse not in close_data.columns or hisse not in volume_data.columns:
                 continue
             try:
-                close_prices = hisse_df['Close']
-                volumes = hisse_df['Volume']
-                if len(close_prices) < 6 or len(volumes) < 20:
+                close_prices = close_data[hisse].dropna()
+                volumes = volume_data[hisse].dropna()
+                if len(close_prices) < 6 or len(volumes) < 5:
                     continue
                 fiyat_5g = close_prices.pct_change(5, fill_method=None).iloc[-1] * 100
-                hacim_ort_20 = volumes.rolling(window=20).mean().iloc[-1]
+                hacim_ort_20 = volumes.rolling(window=20, min_periods=5).mean().iloc[-1]
                 son_hacim = volumes.iloc[-1]
                 hacim_gucu = son_hacim / hacim_ort_20 if hacim_ort_20 else 0.0
+
+                if pd.isna(fiyat_5g) or pd.isna(hacim_gucu):
+                    continue
 
                 if fiyat_5g > 0 and hacim_gucu > 1.2:
                     durum, puan = "GÜÇLÜ GİRİŞ", 3
@@ -248,7 +275,6 @@ elif page == "MSCI Para Akışı Analizi":
                     'Para Akış Sinyali': durum,
                     'Skor': puan
                 })
-                time.sleep(0.2)  # UI'nin "donmaması" için kısa bekleme
             except Exception:
                 continue
         rapor_progress.empty()
@@ -358,22 +384,49 @@ elif page == "BIST30 Para Akışı":
 
     def analiz_yap(hisse_listesi):
         analiz_listesi = []
+
+        # Bulk download all tickers in a single API call with retries
+        data = None
+        for attempt in range(3):
+            try:
+                data = yf.download(
+                    hisse_listesi,
+                    period="1mo",
+                    auto_adjust=True,
+                    threads=False,
+                    progress=False,
+                    timeout=20,
+                )
+                if data is not None and not data.empty:
+                    break
+            except Exception:
+                data = None
+            time.sleep(2 * (attempt + 1))
+
+        if data is None or data.empty or 'Close' not in data.columns or 'Volume' not in data.columns:
+            return analiz_listesi
+
+        close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+        volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
         rapor_progress = st.progress(0, text="Analiz başlatılıyor...")
         toplam = len(hisse_listesi)
         for idx, hisse in enumerate(hisse_listesi, 1):
             rapor_progress.progress(idx / toplam, text=f"{hisse} işleniyor ({idx}/{toplam})...")
-            hisse_df = hisse_verisi_cek(hisse)
-            if hisse_df is None:
+            if hisse not in close_data.columns or hisse not in volume_data.columns:
                 continue
             try:
-                close_prices = hisse_df['Close']
-                volumes = hisse_df['Volume']
-                if len(close_prices) < 6 or len(volumes) < 20:
+                close_prices = close_data[hisse].dropna()
+                volumes = volume_data[hisse].dropna()
+                if len(close_prices) < 6 or len(volumes) < 5:
                     continue
                 fiyat_5g = close_prices.pct_change(5, fill_method=None).iloc[-1] * 100
-                hacim_ort_20 = volumes.rolling(window=20).mean().iloc[-1]
+                hacim_ort_20 = volumes.rolling(window=20, min_periods=5).mean().iloc[-1]
                 son_hacim = volumes.iloc[-1]
                 hacim_gucu = son_hacim / hacim_ort_20 if hacim_ort_20 else 0.0
+
+                if pd.isna(fiyat_5g) or pd.isna(hacim_gucu):
+                    continue
 
                 if fiyat_5g > 0 and hacim_gucu > 1.2:
                     durum, puan = "GÜÇLÜ GİRİŞ", 3
@@ -390,7 +443,6 @@ elif page == "BIST30 Para Akışı":
                     'Para Akış Sinyali': durum,
                     'Skor': puan
                 })
-                time.sleep(0.2)  # UI'nin "donmaması" için kısa bekleme
             except Exception:
                 continue
         rapor_progress.empty()
@@ -496,15 +548,33 @@ elif page == "Sektörel Analiz":
     if st.button("Sektörel Analizi Çalıştır"):
         with st.spinner("Sektörel trendler hesaplanıyor..."):
             try:
-                # Veri çekimi
-                data = yf.download(hisseler, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
+                # Veri çekimi (with retries)
+                data = None
+                for attempt in range(3):
+                    try:
+                        data = yf.download(hisseler, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
+                        if data is not None and not data.empty:
+                            break
+                    except Exception:
+                        data = None
+                    time.sleep(2 * (attempt + 1))
 
-                if data.empty:
+                close_data = pd.DataFrame()
+                volume_data = pd.DataFrame()
+                if data is not None and not data.empty and 'Close' in data.columns and 'Volume' in data.columns:
+                    close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+                    volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
+                if close_data.empty or volume_data.empty:
                     st.warning("Veri çekilemedi. Lütfen daha sonra tekrar deneyin.")
                 else:
                     # 2. Getiri ve Hacim Hesaplama
-                    returns = data['Close'].pct_change(5, fill_method=None).iloc[-1] * 100
-                    volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
+                    returns = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                    volumes = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+
+                    common_tickers = returns.index.intersection(volumes.index)
+                    returns = returns.loc[common_tickers].dropna()
+                    volumes = volumes.loc[returns.index]
 
                     # 3. Verileri Birleştirme
                     df = pd.DataFrame({
@@ -603,16 +673,35 @@ elif page == "BIST30 Hacim Analizi":
     if st.button("Hacim Analizini Çalıştır"):
         with st.spinner("Hacim analizi hesaplanıyor..."):
             try:
-                # Veri çekimi
-                data = yf.download(hisseler, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
+                # Veri çekimi (with retries)
+                data = None
+                for attempt in range(3):
+                    try:
+                        data = yf.download(hisseler, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
+                        if data is not None and not data.empty:
+                            break
+                    except Exception:
+                        data = None
+                    time.sleep(2 * (attempt + 1))
 
-                if data.empty:
+                close_data = pd.DataFrame()
+                volume_data = pd.DataFrame()
+                if data is not None and not data.empty and 'Close' in data.columns and 'Volume' in data.columns:
+                    close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+                    volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
+                if close_data.empty or volume_data.empty:
                     st.warning("Veri çekilemedi. Lütfen daha sonra tekrar deneyin.")
                 else:
                     # Getiri ve Hacim Hesaplama
-                    returns = data['Close'].pct_change(5, fill_method=None).iloc[-1] * 100
-                    volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
-                    current_prices = data['Close'].iloc[-1]
+                    returns = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                    volumes = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                    current_prices = close_data.iloc[-1]
+
+                    common_tickers = returns.index.intersection(volumes.index).intersection(current_prices.index)
+                    returns = returns.loc[common_tickers]
+                    volumes = volumes.loc[common_tickers]
+                    current_prices = current_prices.loc[common_tickers]
 
                     # Verileri Birleştirme (Sektör sütunu olmadan)
                     df = pd.DataFrame({
@@ -923,49 +1012,67 @@ elif page == "Bist30-Full":
                     time.sleep(0.1)
                 except Exception:
                     continue
-            
-            para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by='Skor', ascending=False)
+
+            if analiz_listesi:
+                para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by='Skor', ascending=False)
+            else:
+                para_akisi_df = pd.DataFrame(columns=['Tarih', 'Hisse', 'Fiyat Değişim (5G %)', 'Hacim Gücü (x)', 'Para Akış Sinyali', 'Skor'])
             st.session_state.para_akisi_df = para_akisi_df
             progress_bar.progress(0.5)
-            
+
             # 3. Sektorel Analiz
             status_text.text("3/4: Sektörel analiz yapılıyor...")
             progress_bar.progress(0.6)
-            
+
             data = yf.download(tickers, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
-            if not data.empty:
-                returns = data['Close'].pct_change(5).iloc[-1] * 100
-                volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
-                
+            close_data = pd.DataFrame()
+            volume_data = pd.DataFrame()
+            if not data.empty and 'Close' in data.columns and 'Volume' in data.columns:
+                close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+                volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
+            if not close_data.empty and not volume_data.empty:
+                returns = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+
+                common_tickers = returns.index.intersection(volumes.index)
+                returns = returns.loc[common_tickers].dropna()
+                volumes = volumes.loc[returns.index]
+
                 df_sektorel = pd.DataFrame({
                     'Hisse': returns.index,
                     'Sektör': [sektor_haritasi.get(h, 'Bilinmeyen') for h in returns.index],
                     'Haftalık Getiri %': returns.values,
                     'Hacim Gücü': volumes.values
                 })
-                
+
                 df_sektorel['Sektör Skoru'] = df_sektorel['Haftalık Getiri %'] * df_sektorel['Hacim Gücü']
                 sektor_ozet = df_sektorel.groupby('Sektör')['Sektör Skoru'].mean().sort_values(ascending=False)
                 sektor_ozet_df = sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'})
                 sektor_detay_df = df_sektorel.sort_values('Sektör Skoru', ascending=False)
-                
+
                 st.session_state.sektor_ozet_df = sektor_ozet_df
                 st.session_state.sektor_detay_df = sektor_detay_df
             else:
                 st.session_state.sektor_ozet_df = pd.DataFrame()
                 st.session_state.sektor_detay_df = pd.DataFrame()
-            
+
             progress_bar.progress(0.75)
-            
+
             # 4. Hacim Analizi
             status_text.text("4/4: Hacim analizi yapılıyor...")
             progress_bar.progress(0.85)
-            
-            if not data.empty:
-                returns_hacim = data['Close'].pct_change(5).iloc[-1] * 100
-                volumes_hacim = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
-                current_prices = data['Close'].iloc[-1]
-                
+
+            if not close_data.empty and not volume_data.empty:
+                returns_hacim = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes_hacim = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                current_prices = close_data.iloc[-1]
+
+                common_tickers = returns_hacim.index.intersection(volumes_hacim.index).intersection(current_prices.index)
+                returns_hacim = returns_hacim.loc[common_tickers]
+                volumes_hacim = volumes_hacim.loc[common_tickers]
+                current_prices = current_prices.loc[common_tickers]
+
                 hacim_df = pd.DataFrame({
                     'Hisse': returns_hacim.index,
                     'Güncel Fiyat': current_prices.values,
@@ -974,19 +1081,19 @@ elif page == "Bist30-Full":
                 })
                 hacim_df['Güncel Fiyat'] = hacim_df['Güncel Fiyat'].round(2)
                 hacim_df_sorted = hacim_df.sort_values('Hacim Gücü', ascending=False).reset_index(drop=True)
-                
+
                 st.session_state.hacim_analiz_df = hacim_df_sorted
             else:
                 st.session_state.hacim_analiz_df = pd.DataFrame()
-            
+
             progress_bar.progress(1.0)
             status_text.text("✅ Tüm analizler tamamlandı!")
             time.sleep(0.5)
             progress_bar.empty()
             status_text.empty()
-            
+
             st.success("✅ Tüm analizler başarıyla tamamlandı!")
-            
+
             # Store metadata
             st.session_state.analysis_metadata = {
                 'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -1331,49 +1438,67 @@ elif page == "Kontrat-Tum":
                     time.sleep(0.1)
                 except Exception:
                     continue
-            
-            para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by='Skor', ascending=False)
+
+            if analiz_listesi:
+                para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by='Skor', ascending=False)
+            else:
+                para_akisi_df = pd.DataFrame(columns=['Tarih', 'Hisse', 'Fiyat Değişim (5G %)', 'Hacim Gücü (x)', 'Para Akış Sinyali', 'Skor'])
             st.session_state.kontrat_para_akisi_df = para_akisi_df
             progress_bar.progress(0.5)
-            
+
             # 3. Sektorel Analiz
             status_text.text("3/4: Sektörel analiz yapılıyor...")
             progress_bar.progress(0.6)
-            
+
             data = yf.download(tickers, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
-            if not data.empty:
-                returns = data['Close'].pct_change(5).iloc[-1] * 100
-                volumes = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
-                
+            close_data = pd.DataFrame()
+            volume_data = pd.DataFrame()
+            if not data.empty and 'Close' in data.columns and 'Volume' in data.columns:
+                close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+                volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
+            if not close_data.empty and not volume_data.empty:
+                returns = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+
+                common_tickers = returns.index.intersection(volumes.index)
+                returns = returns.loc[common_tickers].dropna()
+                volumes = volumes.loc[returns.index]
+
                 df_sektorel = pd.DataFrame({
                     'Hisse': returns.index,
                     'Sektör': [sektor_haritasi.get(h, 'Bilinmeyen') for h in returns.index],
                     'Haftalık Getiri %': returns.values,
                     'Hacim Gücü': volumes.values
                 })
-                
+
                 df_sektorel['Sektör Skoru'] = df_sektorel['Haftalık Getiri %'] * df_sektorel['Hacim Gücü']
                 sektor_ozet = df_sektorel.groupby('Sektör')['Sektör Skoru'].mean().sort_values(ascending=False)
                 sektor_ozet_df = sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'})
                 sektor_detay_df = df_sektorel.sort_values('Sektör Skoru', ascending=False)
-                
+
                 st.session_state.kontrat_sektor_ozet_df = sektor_ozet_df
                 st.session_state.kontrat_sektor_detay_df = sektor_detay_df
             else:
                 st.session_state.kontrat_sektor_ozet_df = pd.DataFrame()
                 st.session_state.kontrat_sektor_detay_df = pd.DataFrame()
-            
+
             progress_bar.progress(0.75)
-            
+
             # 4. Hacim Analizi
             status_text.text("4/4: Hacim analizi yapılıyor...")
             progress_bar.progress(0.85)
-            
-            if not data.empty:
-                returns_hacim = data['Close'].pct_change(5).iloc[-1] * 100
-                volumes_hacim = data['Volume'].iloc[-1] / data['Volume'].rolling(20).mean().iloc[-1]
-                current_prices = data['Close'].iloc[-1]
-                
+
+            if not close_data.empty and not volume_data.empty:
+                returns_hacim = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes_hacim = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                current_prices = close_data.iloc[-1]
+
+                common_tickers = returns_hacim.index.intersection(volumes_hacim.index).intersection(current_prices.index)
+                returns_hacim = returns_hacim.loc[common_tickers]
+                volumes_hacim = volumes_hacim.loc[common_tickers]
+                current_prices = current_prices.loc[common_tickers]
+
                 hacim_df = pd.DataFrame({
                     'Hisse': returns_hacim.index,
                     'Güncel Fiyat': current_prices.values,
@@ -1382,7 +1507,7 @@ elif page == "Kontrat-Tum":
                 })
                 hacim_df['Güncel Fiyat'] = hacim_df['Güncel Fiyat'].round(2)
                 hacim_df_sorted = hacim_df.sort_values('Hacim Gücü', ascending=False).reset_index(drop=True)
-                
+
                 st.session_state.kontrat_hacim_analiz_df = hacim_df_sorted
             else:
                 st.session_state.kontrat_hacim_analiz_df = pd.DataFrame()
