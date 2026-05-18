@@ -97,7 +97,7 @@ st.set_page_config(page_title="BIST Analysis App", layout="wide")
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Sayfa Seçiniz:",
-    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation", "Bist30-Full", "Kontrat-Tum", "Euro", "Gold"]
+    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation", "Bist30-Full", "Kontrat-Tum", "Msci Full", "Euro", "Gold"]
 )
 
 # Page 1: BIST Data Analysis (from app.py)
@@ -1637,7 +1637,333 @@ elif page == "Kontrat-Tum":
                     key="download_json_kontrat"
                 )
 
-# Page 8: Euro
+# Page 9: Msci Full
+elif page == "Msci Full":
+    st.title("📊 MSCI Full Analysis")
+
+    st.write(
+        """
+        Bu sayfa tüm MSCI Türkiye analizlerini tek bir yerde birleştirir:
+
+        - **Korelasyon Analizi:** Hisse korelasyon matrisi ve çiftleri
+        - **Para Akışı Analizi:** Para giriş/çıkış sinyalleri
+        - **Sektörel Analiz:** Sektör bazında para akış hızı
+        - **Hacim Analizi:** Hacim gücü ve getiri analizi
+
+        Tüm analizler tek bir butonla çalıştırılır ve sonuçlar Excel veya JSON formatında indirilebilir.
+        """
+    )
+
+    tickers = [
+        'ASELS.IS', 'BIMAS.IS', 'AKBNK.IS', 'TUPRS.IS', 'KCHOL.IS',
+        'THYAO.IS', 'TCELL.IS', 'ISCTR.IS', 'YKBNK.IS', 'FROTO.IS',
+        'TOASO.IS', 'SISE.IS', 'EREGL.IS'
+    ]
+
+    sektor_haritasi = {
+        'ASELS.IS': 'Elektronik teknoloji',
+        'BIMAS.IS': 'Perakende satış',
+        'AKBNK.IS': 'Finans',
+        'TUPRS.IS': 'Enerji mineralleri',
+        'KCHOL.IS': 'Enerji mineralleri',
+        'THYAO.IS': 'Taşımacılık',
+        'TCELL.IS': 'İletişim',
+        'ISCTR.IS': 'Finans',
+        'YKBNK.IS': 'Finans',
+        'FROTO.IS': 'Dayanıklı tüketim malları',
+        'TOASO.IS': 'Dayanıklı tüketim malları',
+        'SISE.IS': 'Dayanıklı tüketim malları',
+        'EREGL.IS': 'Enerji-dışı mineraller',
+    }
+
+    period_options = ["5d", "7d", "3d", "1mo", "1y"]
+    selected_period = st.selectbox(
+        "Dönem Seçiniz (Korelasyon için):",
+        options=period_options,
+        index=0,
+        key="msci_full_period"
+    )
+
+    column_options = {"Kapanis": "Close", "Hacim": "Volume"}
+    selected_column_label = st.selectbox(
+        "Veri Türü Seçiniz (Korelasyon için):",
+        options=list(column_options.keys()),
+        index=0,
+        key="msci_full_column"
+    )
+    selected_column = column_options[selected_column_label]
+
+    if selected_period in ["5d", "7d", "3d"]:
+        selected_interval = "1h"
+    else:
+        selected_interval = "1d"
+
+    if st.button("Tüm Analizleri Çalıştır", key="run_full_analysis_msci", type="primary"):
+        progress_bar = st.progress(0, text="Analizler başlatılıyor...")
+        status_text = st.empty()
+
+        try:
+            # 1. Correlation Analysis
+            status_text.text("1/4: Korelasyon analizi yapılıyor...")
+            progress_bar.progress(0.1)
+
+            close_df = download_selected_column(
+                tickers,
+                period=selected_period,
+                interval=selected_interval,
+                selected_column=selected_column,
+                auto_adjust=True,
+                batch_size=20,
+                pause_s=1.0,
+                tries=2,
+            )
+            close_df = close_df.loc[~(close_df == 0).all(axis=1)]
+            returns_corr = close_df.pct_change(fill_method=None).dropna()
+            corr_matrix = returns_corr.corr()
+
+            correlation_pairs = []
+            for i in range(len(corr_matrix.columns)):
+                for j in range(i + 1, len(corr_matrix.columns)):
+                    stock1 = corr_matrix.columns[i]
+                    stock2 = corr_matrix.columns[j]
+                    pair = tuple(sorted([stock1, stock2]))
+                    correlation_pairs.append((pair[0], pair[1], corr_matrix.iloc[i, j]))
+
+            pairs_df = pd.DataFrame(correlation_pairs, columns=['Stock 1', 'Stock 2', 'Correlation'])
+            pairs_df['Correlation'] = pairs_df['Correlation'].round(4)
+
+            st.session_state.msci_correlation_matrix = corr_matrix
+            st.session_state.msci_correlation_pairs = pairs_df
+            progress_bar.progress(0.25)
+
+            # 2-4. Bulk download once for Para Akisi + Sektorel + Hacim
+            status_text.text("2/4: Para akışı analizi yapılıyor...")
+            progress_bar.progress(0.35)
+
+            bulk_data = None
+            for attempt in range(3):
+                try:
+                    bulk_data = yf.download(
+                        tickers,
+                        period="1mo",
+                        auto_adjust=True,
+                        threads=False,
+                        progress=False,
+                        timeout=20,
+                    )
+                    if bulk_data is not None and not bulk_data.empty:
+                        break
+                except Exception:
+                    bulk_data = None
+                time.sleep(2 * (attempt + 1))
+
+            close_data = pd.DataFrame()
+            volume_data = pd.DataFrame()
+            if bulk_data is not None and not bulk_data.empty and 'Close' in bulk_data.columns and 'Volume' in bulk_data.columns:
+                close_data = bulk_data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+                volume_data = bulk_data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
+
+            # Para Akisi
+            analiz_listesi = []
+            for hisse in tickers:
+                if hisse not in close_data.columns or hisse not in volume_data.columns:
+                    continue
+                try:
+                    close_prices = close_data[hisse].dropna()
+                    volumes = volume_data[hisse].dropna()
+                    if len(close_prices) < 6 or len(volumes) < 5:
+                        continue
+                    fiyat_5g = close_prices.pct_change(5, fill_method=None).iloc[-1] * 100
+                    hacim_ort_20 = volumes.rolling(window=20, min_periods=5).mean().iloc[-1]
+                    son_hacim = volumes.iloc[-1]
+                    hacim_gucu = son_hacim / hacim_ort_20 if hacim_ort_20 else 0.0
+                    if pd.isna(fiyat_5g) or pd.isna(hacim_gucu):
+                        continue
+                    if fiyat_5g > 0 and hacim_gucu > 1.2:
+                        durum, puan = "GÜÇLÜ GİRİŞ", 3
+                    elif fiyat_5g < 0 and hacim_gucu > 1.2:
+                        durum, puan = "GÜÇLÜ ÇIKIŞ", -3
+                    else:
+                        durum, puan = "NORMAL / ROTASYON", 0
+                    analiz_listesi.append({
+                        'Tarih': datetime.now().strftime('%Y-%m-%d'),
+                        'Hisse': hisse,
+                        'Fiyat Değişim (5G %)': round(fiyat_5g, 2),
+                        'Hacim Gücü (x)': round(hacim_gucu, 2),
+                        'Para Akış Sinyali': durum,
+                        'Skor': puan
+                    })
+                except Exception:
+                    continue
+
+            if analiz_listesi:
+                para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by='Skor', ascending=False)
+            else:
+                para_akisi_df = pd.DataFrame(columns=['Tarih', 'Hisse', 'Fiyat Değişim (5G %)', 'Hacim Gücü (x)', 'Para Akış Sinyali', 'Skor'])
+            st.session_state.msci_para_akisi_df = para_akisi_df
+            progress_bar.progress(0.5)
+
+            # Sektorel Analiz
+            status_text.text("3/4: Sektörel analiz yapılıyor...")
+            progress_bar.progress(0.6)
+
+            if not close_data.empty and not volume_data.empty:
+                returns_s = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes_s = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                common = returns_s.index.intersection(volumes_s.index)
+                returns_s = returns_s.loc[common].dropna()
+                volumes_s = volumes_s.loc[returns_s.index]
+
+                df_sektorel = pd.DataFrame({
+                    'Hisse': returns_s.index,
+                    'Sektör': [sektor_haritasi.get(h, 'Bilinmeyen') for h in returns_s.index],
+                    'Haftalık Getiri %': returns_s.values,
+                    'Hacim Gücü': volumes_s.values
+                })
+                df_sektorel['Sektör Skoru'] = df_sektorel['Haftalık Getiri %'] * df_sektorel['Hacim Gücü']
+                sektor_ozet = df_sektorel.groupby('Sektör')['Sektör Skoru'].mean().sort_values(ascending=False)
+                sektor_ozet_df = sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'})
+                sektor_detay_df = df_sektorel.sort_values('Sektör Skoru', ascending=False)
+                st.session_state.msci_sektor_ozet_df = sektor_ozet_df
+                st.session_state.msci_sektor_detay_df = sektor_detay_df
+            else:
+                st.session_state.msci_sektor_ozet_df = pd.DataFrame()
+                st.session_state.msci_sektor_detay_df = pd.DataFrame()
+
+            progress_bar.progress(0.75)
+
+            # Hacim Analizi
+            status_text.text("4/4: Hacim analizi yapılıyor...")
+            progress_bar.progress(0.85)
+
+            if not close_data.empty and not volume_data.empty:
+                returns_h = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes_h = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                current_prices = close_data.iloc[-1]
+                common = returns_h.index.intersection(volumes_h.index).intersection(current_prices.index)
+                returns_h = returns_h.loc[common]
+                volumes_h = volumes_h.loc[common]
+                current_prices = current_prices.loc[common]
+
+                hacim_df = pd.DataFrame({
+                    'Hisse': returns_h.index,
+                    'Güncel Fiyat': current_prices.values,
+                    'Haftalık Getiri %': returns_h.values,
+                    'Hacim Gücü': volumes_h.values
+                })
+                hacim_df['Güncel Fiyat'] = hacim_df['Güncel Fiyat'].round(2)
+                st.session_state.msci_hacim_analiz_df = hacim_df.sort_values('Hacim Gücü', ascending=False).reset_index(drop=True)
+            else:
+                st.session_state.msci_hacim_analiz_df = pd.DataFrame()
+
+            progress_bar.progress(1.0)
+            status_text.text("✅ Tüm analizler tamamlandı!")
+            time.sleep(0.5)
+            progress_bar.empty()
+            status_text.empty()
+            st.success("✅ Tüm analizler başarıyla tamamlandı!")
+
+            st.session_state.msci_analysis_metadata = {
+                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'period': selected_period,
+                'column_type': selected_column_label
+            }
+
+        except Exception as e:
+            st.error(f"Analiz sırasında bir hata oluştu: {e}")
+            progress_bar.empty()
+            status_text.empty()
+
+    # Display results
+    if 'msci_correlation_matrix' in st.session_state:
+        with st.expander("📊 Korelasyon Analizi", expanded=False):
+            st.subheader("Korelasyon Matrisi")
+            st.dataframe(st.session_state.msci_correlation_matrix, use_container_width=True)
+            st.subheader("Korelasyon Çiftleri")
+            st.dataframe(st.session_state.msci_correlation_pairs, use_container_width=True, height=300)
+
+    if 'msci_para_akisi_df' in st.session_state and not st.session_state.msci_para_akisi_df.empty:
+        with st.expander("💰 Para Akışı Analizi", expanded=False):
+            st.dataframe(st.session_state.msci_para_akisi_df, use_container_width=True)
+
+    if 'msci_sektor_ozet_df' in st.session_state and not st.session_state.msci_sektor_ozet_df.empty:
+        with st.expander("🏭 Sektörel Analiz", expanded=False):
+            st.subheader("Sektörel Özet")
+            st.dataframe(st.session_state.msci_sektor_ozet_df, use_container_width=True)
+            st.subheader("Hisse Detayları")
+            st.dataframe(st.session_state.msci_sektor_detay_df, use_container_width=True)
+
+    if 'msci_hacim_analiz_df' in st.session_state and not st.session_state.msci_hacim_analiz_df.empty:
+        with st.expander("📈 Hacim Analizi", expanded=False):
+            st.dataframe(st.session_state.msci_hacim_analiz_df, use_container_width=True)
+
+    # Export
+    if 'msci_correlation_matrix' in st.session_state:
+        st.subheader("📥 Veri Dışa Aktarım")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("📥 Excel Dosyası Oluştur", key="export_excel_msci"):
+                try:
+                    excel_buffer = io.BytesIO()
+                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                        st.session_state.msci_correlation_matrix.to_excel(writer, sheet_name='Correlation Matrix', index=True)
+                        st.session_state.msci_correlation_pairs.to_excel(writer, sheet_name='Correlation Pairs', index=False)
+                        if 'msci_para_akisi_df' in st.session_state and not st.session_state.msci_para_akisi_df.empty:
+                            st.session_state.msci_para_akisi_df.to_excel(writer, sheet_name='Para Akisi', index=False)
+                        if 'msci_sektor_ozet_df' in st.session_state and not st.session_state.msci_sektor_ozet_df.empty:
+                            st.session_state.msci_sektor_ozet_df.to_excel(writer, sheet_name='Sektorel Ozet', index=False)
+                        if 'msci_sektor_detay_df' in st.session_state and not st.session_state.msci_sektor_detay_df.empty:
+                            st.session_state.msci_sektor_detay_df.to_excel(writer, sheet_name='Sektorel Detay', index=False)
+                        if 'msci_hacim_analiz_df' in st.session_state and not st.session_state.msci_hacim_analiz_df.empty:
+                            st.session_state.msci_hacim_analiz_df.to_excel(writer, sheet_name='Hacim Analizi', index=False)
+                    excel_buffer.seek(0)
+                    st.session_state.msci_excel_buffer = excel_buffer.getvalue()
+                    st.success("✅ Excel dosyası hazır! İndir butonuna tıklayın.")
+                except Exception as e:
+                    st.error(f"Excel dosyası oluşturulurken hata: {e}")
+
+            if 'msci_excel_buffer' in st.session_state:
+                st.download_button(
+                    label="📥 Excel Dosyasını İndir",
+                    data=st.session_state.msci_excel_buffer,
+                    file_name=f"MSCI_Full_Analysis_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    key="download_excel_msci"
+                )
+
+        with col2:
+            if st.button("📄 JSON Dosyası Oluştur", key="export_json_msci"):
+                try:
+                    json_data = {
+                        "metadata": st.session_state.get('msci_analysis_metadata', {}),
+                        "correlation": {
+                            "matrix": st.session_state.msci_correlation_matrix.to_dict() if 'msci_correlation_matrix' in st.session_state else {},
+                            "pairs": st.session_state.msci_correlation_pairs.to_dict('records') if 'msci_correlation_pairs' in st.session_state else []
+                        },
+                        "para_akisi": st.session_state.msci_para_akisi_df.to_dict('records') if 'msci_para_akisi_df' in st.session_state and not st.session_state.msci_para_akisi_df.empty else [],
+                        "sektorel": {
+                            "ozet": st.session_state.msci_sektor_ozet_df.to_dict('records') if 'msci_sektor_ozet_df' in st.session_state and not st.session_state.msci_sektor_ozet_df.empty else [],
+                            "detay": st.session_state.msci_sektor_detay_df.to_dict('records') if 'msci_sektor_detay_df' in st.session_state and not st.session_state.msci_sektor_detay_df.empty else []
+                        },
+                        "hacim_analizi": st.session_state.msci_hacim_analiz_df.to_dict('records') if 'msci_hacim_analiz_df' in st.session_state and not st.session_state.msci_hacim_analiz_df.empty else []
+                    }
+                    json_str = json.dumps(json_data, indent=2, ensure_ascii=False, default=str)
+                    st.session_state.msci_json_bytes = json_str.encode('utf-8')
+                    st.success("✅ JSON dosyası hazır! İndir butonuna tıklayın.")
+                except Exception as e:
+                    st.error(f"JSON dosyası oluşturulurken hata: {e}")
+
+            if 'msci_json_bytes' in st.session_state:
+                st.download_button(
+                    label="📄 JSON Dosyasını İndir",
+                    data=st.session_state.msci_json_bytes,
+                    file_name=f"MSCI_Full_Analysis_{datetime.now().strftime('%Y-%m-%d')}.json",
+                    mime='application/json',
+                    key="download_json_msci"
+                )
+
+# Page 10: Euro
 elif page == "Euro":
     st.title("💶 Euro (EURUSD=X) Tarihsel Veri")
     st.write("Bu sayfada Euro / Dolar paritesinin geçmiş verilerini çekebilir; Excel ve JSON olarak indirebilirsiniz.")
