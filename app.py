@@ -896,33 +896,30 @@ elif page == "Bist30-Full":
     selected_period = st.selectbox(
         "Dönem Seçiniz (Korelasyon için):",
         options=period_options,
-        index=0  # Default to 5d
+        index=0,
+        key="bist30_full_period",
     )
-    
+
     column_options = {"Kapanis": "Close", "Hacim": "Volume"}
     selected_column_label = st.selectbox(
         "Veri Türü Seçiniz (Korelasyon için):",
         options=list(column_options.keys()),
-        index=0
+        index=0,
+        key="bist30_full_column",
     )
     selected_column = column_options[selected_column_label]
-    
-    # Determine interval based on period
-    if selected_period in ["5d", "7d", "3d"]:
-        selected_interval = "1h"
-    else:
-        selected_interval = "1d"
-    
-    # Main analysis button
+
+    selected_interval = "1h" if selected_period in ["5d", "7d", "3d"] else "1d"
+
     if st.button("Tüm Analizleri Çalıştır", key="run_full_analysis", type="primary"):
         progress_bar = st.progress(0, text="Analizler başlatılıyor...")
         status_text = st.empty()
-        
+
         try:
             # 1. Correlation Analysis
             status_text.text("1/4: Korelasyon analizi yapılıyor...")
             progress_bar.progress(0.1)
-            
+
             close_df = download_selected_column(
                 tickers,
                 period=selected_period,
@@ -933,129 +930,137 @@ elif page == "Bist30-Full":
                 pause_s=1.0,
                 tries=2,
             )
-            close_df = close_df.loc[~(close_df == 0).all(axis=1)]
-            returns = close_df.pct_change().dropna()
-            corr_matrix = returns.corr()
-            
-            # Create correlation pairs
-            correlation_pairs = []
-            for i in range(len(corr_matrix.columns)):
-                for j in range(i + 1, len(corr_matrix.columns)):
-                    stock1 = corr_matrix.columns[i]
-                    stock2 = corr_matrix.columns[j]
-                    pair = tuple(sorted([stock1, stock2]))
-                    correlation_value = corr_matrix.iloc[i, j]
-                    correlation_pairs.append((pair[0], pair[1], correlation_value))
-            
-            pairs_df = pd.DataFrame(correlation_pairs, columns=['Stock 1', 'Stock 2', 'Correlation'])
-            pairs_df['Correlation'] = pairs_df['Correlation'].round(4)
-            
-            st.session_state.correlation_matrix = corr_matrix
-            st.session_state.correlation_pairs = pairs_df
+
+            if close_df.empty:
+                corr_matrix = pd.DataFrame()
+                pairs_df = pd.DataFrame(columns=["Stock 1", "Stock 2", "Correlation"])
+                st.warning("Korelasyon için veri çekilemedi.")
+            else:
+                close_df = close_df.loc[~(close_df == 0).all(axis=1)]
+                returns_corr = get_safe_returns(close_df)
+                if returns_corr.empty:
+                    corr_matrix = pd.DataFrame()
+                    pairs_df = pd.DataFrame(columns=["Stock 1", "Stock 2", "Correlation"])
+                    st.warning("Korelasyon için yeterli getiri verisi yok.")
+                else:
+                    corr_matrix = returns_corr.corr()
+                    correlation_pairs = []
+                    cols = corr_matrix.columns
+                    for i in range(len(cols)):
+                        for j in range(i + 1, len(cols)):
+                            pair = tuple(sorted([cols[i], cols[j]]))
+                            correlation_pairs.append((pair[0], pair[1], corr_matrix.iloc[i, j]))
+                    pairs_df = pd.DataFrame(correlation_pairs, columns=["Stock 1", "Stock 2", "Correlation"])
+                    pairs_df["Correlation"] = pairs_df["Correlation"].round(4)
+
+            st.session_state.bist30_correlation_matrix = corr_matrix
+            st.session_state.bist30_correlation_pairs = pairs_df
             progress_bar.progress(0.25)
-            
-            # 2. Para Akisi Analizi
+
+            # 2-4. Bulk download once for Para Akisi + Sektorel + Hacim
             status_text.text("2/4: Para akışı analizi yapılıyor...")
             progress_bar.progress(0.35)
-            
-            @st.cache_data(show_spinner=False)
-            def hisse_verisi_cek(hisse, max_deneme=3, bekleme_suresi=2):
-                for deneme in range(max_deneme):
-                    try:
-                        if deneme > 0:
-                            time.sleep(bekleme_suresi * deneme)
-                        ticker = yf.Ticker(hisse)
-                        hisse_df = ticker.history(period="1mo", auto_adjust=True, timeout=20)
-                        if hisse_df.empty:
-                            if deneme < max_deneme - 1:
-                                continue
-                            else:
-                                return None
-                        return hisse_df
-                    except Exception:
-                        if deneme < max_deneme - 1:
-                            continue
-                        else:
-                            return None
-                return None
-            
+
+            bulk_data = None
+            for attempt in range(3):
+                try:
+                    bulk_data = yf.download(
+                        tickers,
+                        period="1mo",
+                        auto_adjust=True,
+                        threads=False,
+                        progress=False,
+                        timeout=20,
+                    )
+                    if bulk_data is not None and not bulk_data.empty:
+                        break
+                except Exception:
+                    bulk_data = None
+                time.sleep(2 * (attempt + 1))
+
+            close_data = pd.DataFrame()
+            volume_data = pd.DataFrame()
+            if (
+                bulk_data is not None
+                and not bulk_data.empty
+                and "Close" in bulk_data.columns
+                and "Volume" in bulk_data.columns
+            ):
+                close_data = bulk_data["Close"].dropna(axis=1, how="all").ffill().dropna(axis=0, how="all")
+                volume_data = bulk_data["Volume"].dropna(axis=1, how="all").ffill().dropna(axis=0, how="all")
+
             analiz_listesi = []
-            for idx, hisse in enumerate(tickers):
-                hisse_df = hisse_verisi_cek(hisse)
-                if hisse_df is None:
+            for hisse in tickers:
+                if hisse not in close_data.columns or hisse not in volume_data.columns:
                     continue
                 try:
-                    close_prices = hisse_df['Close']
-                    volumes = hisse_df['Volume']
-                    if len(close_prices) < 6 or len(volumes) < 20:
+                    close_prices = close_data[hisse].dropna()
+                    volumes = volume_data[hisse].dropna()
+                    if len(close_prices) < 6 or len(volumes) < 5:
                         continue
-                    fiyat_5g = close_prices.pct_change(5).iloc[-1] * 100
-                    hacim_ort_20 = volumes.rolling(window=20).mean().iloc[-1]
+                    fiyat_5g = close_prices.pct_change(5, fill_method=None).iloc[-1] * 100
+                    hacim_ort_20 = volumes.rolling(window=20, min_periods=5).mean().iloc[-1]
                     son_hacim = volumes.iloc[-1]
                     hacim_gucu = son_hacim / hacim_ort_20 if hacim_ort_20 else 0.0
-                    
+
+                    if pd.isna(fiyat_5g) or pd.isna(hacim_gucu):
+                        continue
+
                     if fiyat_5g > 0 and hacim_gucu > 1.2:
                         durum, puan = "GÜÇLÜ GİRİŞ", 3
                     elif fiyat_5g < 0 and hacim_gucu > 1.2:
                         durum, puan = "GÜÇLÜ ÇIKIŞ", -3
                     else:
                         durum, puan = "NORMAL / ROTASYON", 0
-                    
+
                     analiz_listesi.append({
-                        'Tarih': datetime.now().strftime('%Y-%m-%d'),
-                        'Hisse': hisse,
-                        'Fiyat Değişim (5G %)': round(fiyat_5g, 2),
-                        'Hacim Gücü (x)': round(hacim_gucu, 2),
-                        'Para Akış Sinyali': durum,
-                        'Skor': puan
+                        "Tarih": datetime.now().strftime("%Y-%m-%d"),
+                        "Hisse": hisse,
+                        "Fiyat Değişim (5G %)": round(fiyat_5g, 2),
+                        "Hacim Gücü (x)": round(hacim_gucu, 2),
+                        "Para Akış Sinyali": durum,
+                        "Skor": puan,
                     })
-                    time.sleep(0.1)
                 except Exception:
                     continue
 
             if analiz_listesi:
-                para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by='Skor', ascending=False)
+                para_akisi_df = pd.DataFrame(analiz_listesi).sort_values(by="Skor", ascending=False)
             else:
-                para_akisi_df = pd.DataFrame(columns=['Tarih', 'Hisse', 'Fiyat Değişim (5G %)', 'Hacim Gücü (x)', 'Para Akış Sinyali', 'Skor'])
-            st.session_state.para_akisi_df = para_akisi_df
+                para_akisi_df = pd.DataFrame(
+                    columns=["Tarih", "Hisse", "Fiyat Değişim (5G %)", "Hacim Gücü (x)", "Para Akış Sinyali", "Skor"]
+                )
+                st.warning("Para akışı analizi için uygun veri bulunamadı.")
+            st.session_state.bist30_para_akisi_df = para_akisi_df
             progress_bar.progress(0.5)
 
             # 3. Sektorel Analiz
             status_text.text("3/4: Sektörel analiz yapılıyor...")
             progress_bar.progress(0.6)
 
-            data = yf.download(tickers, period="1mo", auto_adjust=True, threads=False, progress=False, timeout=20)
-            close_data = pd.DataFrame()
-            volume_data = pd.DataFrame()
-            if not data.empty and 'Close' in data.columns and 'Volume' in data.columns:
-                close_data = data['Close'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
-                volume_data = data['Volume'].dropna(axis=1, how='all').ffill().dropna(axis=0, how='all')
-
             if not close_data.empty and not volume_data.empty:
-                returns = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
-                volumes = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
-
-                common_tickers = returns.index.intersection(volumes.index)
-                returns = returns.loc[common_tickers].dropna()
-                volumes = volumes.loc[returns.index]
+                returns_s = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes_s = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                common = returns_s.index.intersection(volumes_s.index)
+                returns_s = returns_s.loc[common].dropna()
+                volumes_s = volumes_s.loc[returns_s.index]
 
                 df_sektorel = pd.DataFrame({
-                    'Hisse': returns.index,
-                    'Sektör': [sektor_haritasi.get(h, 'Bilinmeyen') for h in returns.index],
-                    'Haftalık Getiri %': returns.values,
-                    'Hacim Gücü': volumes.values
+                    "Hisse": returns_s.index,
+                    "Sektör": [sektor_haritasi.get(h, "Bilinmeyen") for h in returns_s.index],
+                    "Haftalık Getiri %": returns_s.values,
+                    "Hacim Gücü": volumes_s.values,
                 })
-
-                df_sektorel['Sektör Skoru'] = df_sektorel['Haftalık Getiri %'] * df_sektorel['Hacim Gücü']
-                sektor_ozet = df_sektorel.groupby('Sektör')['Sektör Skoru'].mean().sort_values(ascending=False)
-                sektor_ozet_df = sektor_ozet.reset_index().rename(columns={'Sektör Skoru': 'Ortalama Sektör Skoru'})
-                sektor_detay_df = df_sektorel.sort_values('Sektör Skoru', ascending=False)
-
-                st.session_state.sektor_ozet_df = sektor_ozet_df
-                st.session_state.sektor_detay_df = sektor_detay_df
+                df_sektorel["Sektör Skoru"] = df_sektorel["Haftalık Getiri %"] * df_sektorel["Hacim Gücü"]
+                sektor_ozet = df_sektorel.groupby("Sektör")["Sektör Skoru"].mean().sort_values(ascending=False)
+                sektor_ozet_df = sektor_ozet.reset_index().rename(columns={"Sektör Skoru": "Ortalama Sektör Skoru"})
+                sektor_detay_df = df_sektorel.sort_values("Sektör Skoru", ascending=False)
+                st.session_state.bist30_sektor_ozet_df = sektor_ozet_df
+                st.session_state.bist30_sektor_detay_df = sektor_detay_df
             else:
-                st.session_state.sektor_ozet_df = pd.DataFrame()
-                st.session_state.sektor_detay_df = pd.DataFrame()
+                st.session_state.bist30_sektor_ozet_df = pd.DataFrame()
+                st.session_state.bist30_sektor_detay_df = pd.DataFrame()
+                st.warning("Sektörel / hacim analizi için veri çekilemedi.")
 
             progress_bar.progress(0.75)
 
@@ -1064,27 +1069,26 @@ elif page == "Bist30-Full":
             progress_bar.progress(0.85)
 
             if not close_data.empty and not volume_data.empty:
-                returns_hacim = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
-                volumes_hacim = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
+                returns_h = close_data.pct_change(5, fill_method=None).iloc[-1] * 100
+                volumes_h = volume_data.iloc[-1] / volume_data.rolling(20, min_periods=5).mean().iloc[-1]
                 current_prices = close_data.iloc[-1]
-
-                common_tickers = returns_hacim.index.intersection(volumes_hacim.index).intersection(current_prices.index)
-                returns_hacim = returns_hacim.loc[common_tickers]
-                volumes_hacim = volumes_hacim.loc[common_tickers]
-                current_prices = current_prices.loc[common_tickers]
+                common = returns_h.index.intersection(volumes_h.index).intersection(current_prices.index)
+                returns_h = returns_h.loc[common]
+                volumes_h = volumes_h.loc[common]
+                current_prices = current_prices.loc[common]
 
                 hacim_df = pd.DataFrame({
-                    'Hisse': returns_hacim.index,
-                    'Güncel Fiyat': current_prices.values,
-                    'Haftalık Getiri %': returns_hacim.values,
-                    'Hacim Gücü': volumes_hacim.values
+                    "Hisse": returns_h.index,
+                    "Güncel Fiyat": current_prices.values,
+                    "Haftalık Getiri %": returns_h.values,
+                    "Hacim Gücü": volumes_h.values,
                 })
-                hacim_df['Güncel Fiyat'] = hacim_df['Güncel Fiyat'].round(2)
-                hacim_df_sorted = hacim_df.sort_values('Hacim Gücü', ascending=False).reset_index(drop=True)
-
-                st.session_state.hacim_analiz_df = hacim_df_sorted
+                hacim_df["Güncel Fiyat"] = hacim_df["Güncel Fiyat"].round(2)
+                st.session_state.bist30_hacim_analiz_df = hacim_df.sort_values(
+                    "Hacim Gücü", ascending=False
+                ).reset_index(drop=True)
             else:
-                st.session_state.hacim_analiz_df = pd.DataFrame()
+                st.session_state.bist30_hacim_analiz_df = pd.DataFrame()
 
             progress_bar.progress(1.0)
             status_text.text("✅ Tüm analizler tamamlandı!")
@@ -1092,123 +1096,165 @@ elif page == "Bist30-Full":
             progress_bar.empty()
             status_text.empty()
 
-            st.success("✅ Tüm analizler başarıyla tamamlandı!")
+            n_para = len(st.session_state.bist30_para_akisi_df)
+            n_corr = len(st.session_state.bist30_correlation_pairs)
+            st.success(
+                f"✅ Analiz tamamlandı — korelasyon çifti: {n_corr}, para akışı hissesi: {n_para}, "
+                f"hacim: {len(st.session_state.bist30_hacim_analiz_df)}"
+            )
 
-            # Store metadata
-            st.session_state.analysis_metadata = {
-                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'period': selected_period,
-                'column_type': selected_column_label
+            st.session_state.bist30_analysis_metadata = {
+                "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "period": selected_period,
+                "column_type": selected_column_label,
             }
-            
+
         except Exception as e:
             st.error(f"Analiz sırasında bir hata oluştu: {e}")
             progress_bar.empty()
             status_text.empty()
-    
+
     # Display results if available
-    if 'correlation_matrix' in st.session_state:
+    if "bist30_correlation_matrix" in st.session_state and not st.session_state.bist30_correlation_matrix.empty:
         with st.expander("📊 Korelasyon Analizi", expanded=False):
             st.subheader("Korelasyon Matrisi")
-            st.dataframe(st.session_state.correlation_matrix, use_container_width=True)
+            st.dataframe(st.session_state.bist30_correlation_matrix, use_container_width=True)
             st.subheader("Korelasyon Çiftleri")
-            st.dataframe(st.session_state.correlation_pairs, use_container_width=True, height=300)
-    
-    if 'para_akisi_df' in st.session_state and not st.session_state.para_akisi_df.empty:
+            st.dataframe(st.session_state.bist30_correlation_pairs, use_container_width=True, height=300)
+
+    if "bist30_para_akisi_df" in st.session_state and not st.session_state.bist30_para_akisi_df.empty:
         with st.expander("💰 Para Akışı Analizi", expanded=False):
-            st.dataframe(st.session_state.para_akisi_df, use_container_width=True)
-    
-    if 'sektor_ozet_df' in st.session_state and not st.session_state.sektor_ozet_df.empty:
+            st.dataframe(st.session_state.bist30_para_akisi_df, use_container_width=True)
+
+    if "bist30_sektor_ozet_df" in st.session_state and not st.session_state.bist30_sektor_ozet_df.empty:
         with st.expander("🏭 Sektörel Analiz", expanded=False):
             st.subheader("Sektörel Özet")
-            st.dataframe(st.session_state.sektor_ozet_df, use_container_width=True)
+            st.dataframe(st.session_state.bist30_sektor_ozet_df, use_container_width=True)
             st.subheader("Hisse Detayları")
-            st.dataframe(st.session_state.sektor_detay_df, use_container_width=True)
-    
-    if 'hacim_analiz_df' in st.session_state and not st.session_state.hacim_analiz_df.empty:
+            st.dataframe(st.session_state.bist30_sektor_detay_df, use_container_width=True)
+
+    if "bist30_hacim_analiz_df" in st.session_state and not st.session_state.bist30_hacim_analiz_df.empty:
         with st.expander("📈 Hacim Analizi", expanded=False):
-            st.dataframe(st.session_state.hacim_analiz_df, use_container_width=True)
-    
+            st.dataframe(st.session_state.bist30_hacim_analiz_df, use_container_width=True)
+
     # Export buttons
-    if 'correlation_matrix' in st.session_state:
+    if "bist30_correlation_matrix" in st.session_state:
         st.subheader("📥 Veri Dışa Aktarım")
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            # Excel Export
             if st.button("📥 Excel Dosyası Oluştur", key="export_excel"):
                 try:
                     excel_buffer = io.BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        # Sheet 1: Correlation Matrix
-                        st.session_state.correlation_matrix.to_excel(writer, sheet_name='Correlation Matrix', index=True)
-                        
-                        # Sheet 2: Correlation Pairs
-                        st.session_state.correlation_pairs.to_excel(writer, sheet_name='Correlation Pairs', index=False)
-                        
-                        # Sheet 3: Para Akisi
-                        if 'para_akisi_df' in st.session_state and not st.session_state.para_akisi_df.empty:
-                            st.session_state.para_akisi_df.to_excel(writer, sheet_name='Para Akisi', index=False)
-                        
-                        # Sheet 4: Sektorel Ozet
-                        if 'sektor_ozet_df' in st.session_state and not st.session_state.sektor_ozet_df.empty:
-                            st.session_state.sektor_ozet_df.to_excel(writer, sheet_name='Sektorel Ozet', index=False)
-                        
-                        # Sheet 5: Sektorel Detay
-                        if 'sektor_detay_df' in st.session_state and not st.session_state.sektor_detay_df.empty:
-                            st.session_state.sektor_detay_df.to_excel(writer, sheet_name='Sektorel Detay', index=False)
-                        
-                        # Sheet 6: Hacim Analizi
-                        if 'hacim_analiz_df' in st.session_state and not st.session_state.hacim_analiz_df.empty:
-                            st.session_state.hacim_analiz_df.to_excel(writer, sheet_name='Hacim Analizi', index=False)
-                    
+                    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                        if not st.session_state.bist30_correlation_matrix.empty:
+                            st.session_state.bist30_correlation_matrix.to_excel(
+                                writer, sheet_name="Correlation Matrix", index=True
+                            )
+                        st.session_state.bist30_correlation_pairs.to_excel(
+                            writer, sheet_name="Correlation Pairs", index=False
+                        )
+                        if (
+                            "bist30_para_akisi_df" in st.session_state
+                            and not st.session_state.bist30_para_akisi_df.empty
+                        ):
+                            st.session_state.bist30_para_akisi_df.to_excel(
+                                writer, sheet_name="Para Akisi", index=False
+                            )
+                        if (
+                            "bist30_sektor_ozet_df" in st.session_state
+                            and not st.session_state.bist30_sektor_ozet_df.empty
+                        ):
+                            st.session_state.bist30_sektor_ozet_df.to_excel(
+                                writer, sheet_name="Sektorel Ozet", index=False
+                            )
+                        if (
+                            "bist30_sektor_detay_df" in st.session_state
+                            and not st.session_state.bist30_sektor_detay_df.empty
+                        ):
+                            st.session_state.bist30_sektor_detay_df.to_excel(
+                                writer, sheet_name="Sektorel Detay", index=False
+                            )
+                        if (
+                            "bist30_hacim_analiz_df" in st.session_state
+                            and not st.session_state.bist30_hacim_analiz_df.empty
+                        ):
+                            st.session_state.bist30_hacim_analiz_df.to_excel(
+                                writer, sheet_name="Hacim Analizi", index=False
+                            )
                     excel_buffer.seek(0)
-                    st.session_state.excel_buffer = excel_buffer.getvalue()
+                    st.session_state.bist30_excel_buffer = excel_buffer.getvalue()
                     st.success("✅ Excel dosyası hazır! İndir butonuna tıklayın.")
                 except Exception as e:
                     st.error(f"Excel dosyası oluşturulurken hata: {e}")
-            
-            if 'excel_buffer' in st.session_state:
+
+            if "bist30_excel_buffer" in st.session_state:
                 st.download_button(
                     label="📥 Excel Dosyasını İndir",
-                    data=st.session_state.excel_buffer,
+                    data=st.session_state.bist30_excel_buffer,
                     file_name=f"BIST30_Full_Analysis_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    key="download_excel_full"
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_excel_full",
                 )
-        
+
         with col2:
-            # JSON Export
             if st.button("📄 JSON Dosyası Oluştur", key="export_json"):
                 try:
                     json_data = {
-                        "metadata": st.session_state.get('analysis_metadata', {}),
+                        "metadata": st.session_state.get("bist30_analysis_metadata", {}),
                         "correlation": {
-                            "matrix": st.session_state.correlation_matrix.to_dict() if 'correlation_matrix' in st.session_state else {},
-                            "pairs": st.session_state.correlation_pairs.to_dict('records') if 'correlation_pairs' in st.session_state else []
+                            "matrix": (
+                                st.session_state.bist30_correlation_matrix.to_dict()
+                                if "bist30_correlation_matrix" in st.session_state
+                                and not st.session_state.bist30_correlation_matrix.empty
+                                else {}
+                            ),
+                            "pairs": (
+                                st.session_state.bist30_correlation_pairs.to_dict("records")
+                                if "bist30_correlation_pairs" in st.session_state
+                                else []
+                            ),
                         },
-                        "para_akisi": st.session_state.para_akisi_df.to_dict('records') if 'para_akisi_df' in st.session_state and not st.session_state.para_akisi_df.empty else [],
+                        "para_akisi": (
+                            st.session_state.bist30_para_akisi_df.to_dict("records")
+                            if "bist30_para_akisi_df" in st.session_state
+                            and not st.session_state.bist30_para_akisi_df.empty
+                            else []
+                        ),
                         "sektorel": {
-                            "ozet": st.session_state.sektor_ozet_df.to_dict('records') if 'sektor_ozet_df' in st.session_state and not st.session_state.sektor_ozet_df.empty else [],
-                            "detay": st.session_state.sektor_detay_df.to_dict('records') if 'sektor_detay_df' in st.session_state and not st.session_state.sektor_detay_df.empty else []
+                            "ozet": (
+                                st.session_state.bist30_sektor_ozet_df.to_dict("records")
+                                if "bist30_sektor_ozet_df" in st.session_state
+                                and not st.session_state.bist30_sektor_ozet_df.empty
+                                else []
+                            ),
+                            "detay": (
+                                st.session_state.bist30_sektor_detay_df.to_dict("records")
+                                if "bist30_sektor_detay_df" in st.session_state
+                                and not st.session_state.bist30_sektor_detay_df.empty
+                                else []
+                            ),
                         },
-                        "hacim_analizi": st.session_state.hacim_analiz_df.to_dict('records') if 'hacim_analiz_df' in st.session_state and not st.session_state.hacim_analiz_df.empty else []
+                        "hacim_analizi": (
+                            st.session_state.bist30_hacim_analiz_df.to_dict("records")
+                            if "bist30_hacim_analiz_df" in st.session_state
+                            and not st.session_state.bist30_hacim_analiz_df.empty
+                            else []
+                        ),
                     }
-                    
                     json_str = json.dumps(json_data, indent=2, ensure_ascii=False, default=str)
-                    json_bytes = json_str.encode('utf-8')
-                    st.session_state.json_bytes = json_bytes
+                    st.session_state.bist30_json_bytes = json_str.encode("utf-8")
                     st.success("✅ JSON dosyası hazır! İndir butonuna tıklayın.")
                 except Exception as e:
                     st.error(f"JSON dosyası oluşturulurken hata: {e}")
-            
-            if 'json_bytes' in st.session_state:
+
+            if "bist30_json_bytes" in st.session_state:
                 st.download_button(
                     label="📄 JSON Dosyasını İndir",
-                    data=st.session_state.json_bytes,
+                    data=st.session_state.bist30_json_bytes,
                     file_name=f"BIST30_Full_Analysis_{datetime.now().strftime('%Y-%m-%d')}.json",
-                    mime='application/json',
-                    key="download_json_full"
+                    mime="application/json",
+                    key="download_json_full",
                 )
 
 # Page 8: Kontrat-Tum
