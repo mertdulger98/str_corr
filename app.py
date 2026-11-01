@@ -6,7 +6,9 @@ import seaborn as sns
 import time
 import io
 import json
+import zipfile
 from datetime import datetime
+from xml.etree import ElementTree as ET
 
 def _chunk_list(items, size):
     for i in range(0, len(items), size):
@@ -90,6 +92,179 @@ def get_safe_returns(df):
     returns = df.pct_change(fill_method=None).dropna(how="all")
     return returns
 
+
+_XLSX_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+
+def _excel_col_index(col_letters):
+    n = 0
+    for ch in col_letters:
+        if ch.isalpha():
+            n = n * 26 + (ord(ch.upper()) - 64)
+    return n - 1
+
+
+def _coerce_cell_value(val):
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return val
+    text = str(val).strip()
+    if text == "":
+        return None
+    try:
+        return float(text.replace(",", ".")) if text.replace(".", "", 1).replace("-", "", 1).isdigit() or (
+            text.count(".") <= 1 and text.replace(".", "").replace("-", "").isdigit()
+        ) else text
+    except Exception:
+        return text
+
+
+def _read_xlsx_via_zip(raw_bytes):
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+        names = zf.namelist()
+        shared = []
+        if "xl/sharedStrings.xml" in names:
+            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in root.findall("m:si", _XLSX_NS):
+                shared.append("".join(t.text or "" for t in si.findall(".//m:t", _XLSX_NS)))
+
+        sheet_name = next((n for n in names if n.startswith("xl/worksheets/sheet")), None)
+        if sheet_name is None:
+            raise ValueError("Excel dosyasında sayfa bulunamadı.")
+
+        root = ET.fromstring(zf.read(sheet_name))
+        rows = []
+        for row in root.findall("m:sheetData/m:row", _XLSX_NS):
+            values = {}
+            for cell in row.findall("m:c", _XLSX_NS):
+                ref = cell.attrib.get("r", "")
+                letters = "".join(ch for ch in ref if ch.isalpha())
+                cell_type = cell.attrib.get("t")
+                v_el = cell.find("m:v", _XLSX_NS)
+                is_el = cell.find("m:is", _XLSX_NS)
+                if cell_type == "s" and v_el is not None and v_el.text is not None:
+                    val = shared[int(v_el.text)]
+                elif cell_type == "inlineStr" and is_el is not None:
+                    val = "".join(t.text or "" for t in is_el.findall(".//m:t", _XLSX_NS))
+                elif v_el is not None:
+                    val = v_el.text
+                else:
+                    val = None
+                values[_excel_col_index(letters)] = _coerce_cell_value(val)
+            if values:
+                width = max(values) + 1
+                rows.append([values.get(i) for i in range(width)])
+
+    if not rows:
+        return pd.DataFrame()
+
+    header = [str(c).strip() if c is not None else "" for c in rows[0]]
+    data = rows[1:]
+    width = max(len(header), max((len(r) for r in data), default=0))
+    header = header + [f"Unnamed_{i}" for i in range(len(header), width)]
+    data = [r + [None] * (width - len(r)) for r in data]
+    df = pd.DataFrame(data, columns=header)
+    df = df.dropna(how="all")
+    return df
+
+
+def read_uploaded_excel(uploaded_file):
+    raw = uploaded_file.getvalue()
+    try:
+        df = pd.read_excel(io.BytesIO(raw), engine="openpyxl")
+        if df is not None and not df.empty:
+            df.columns = [str(c).strip() for c in df.columns]
+            return df.dropna(how="all")
+    except Exception:
+        pass
+    df = _read_xlsx_via_zip(raw)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+
+def _normalize_kod_series(series):
+    return series.astype(str).str.strip().str.upper().replace({"NAN": pd.NA, "NONE": pd.NA})
+
+
+def _find_kod_column(df):
+    for col in df.columns:
+        if str(col).strip().lower() == "kod":
+            return col
+    raise ValueError("Dosyada 'Kod' kolonu bulunamadı.")
+
+
+def _find_column(df, *, exact=None, contains=None):
+    if exact:
+        for col in df.columns:
+            if str(col).strip() == exact:
+                return col
+    if contains:
+        needle = contains.casefold()
+        matches = [col for col in df.columns if needle in str(col).casefold()]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return matches[0]
+    return None
+
+
+def merge_temel_data(istikrarli_df, yatirim_df, puanlama_df, min_varlik_orani=5):
+    ist = istikrarli_df.copy()
+    yat = yatirim_df.copy()
+    puan = puanlama_df.copy()
+
+    ist_kod = _find_kod_column(ist)
+    yat_kod = _find_kod_column(yat)
+    puan_kod = _find_kod_column(puan)
+
+    ist[ist_kod] = _normalize_kod_series(ist[ist_kod])
+    yat[yat_kod] = _normalize_kod_series(yat[yat_kod])
+    puan[puan_kod] = _normalize_kod_series(puan[puan_kod])
+
+    ist = ist.dropna(subset=[ist_kod]).drop_duplicates(subset=[ist_kod], keep="first")
+    yat = yat.dropna(subset=[yat_kod]).drop_duplicates(subset=[yat_kod], keep="first")
+    puan = puan.dropna(subset=[puan_kod]).drop_duplicates(subset=[puan_kod], keep="first")
+
+    if ist[ist_kod].name != "Kod":
+        ist = ist.rename(columns={ist_kod: "Kod"})
+    if yat[yat_kod].name != "Kod":
+        yat = yat.rename(columns={yat_kod: "Kod"})
+    if puan[puan_kod].name != "Kod":
+        puan = puan.rename(columns={puan_kod: "Kod"})
+
+    puan_col = _find_column(puan, exact="Puan", contains="Puan")
+    if puan_col is None:
+        raise ValueError("Puanlama dosyasında 'Puan' kolonu bulunamadı.")
+
+    degisim_col = _find_column(
+        yat,
+        exact="Yatırımları Artanlar Değişim (%)",
+        contains="Yatırımları Artanlar",
+    )
+    if degisim_col is None:
+        raise ValueError("Yatırım dosyasında 'Yatırımları Artanlar Değişim (%)' kolonu bulunamadı.")
+
+    if yat.shape[1] < 5:
+        raise ValueError("Yatırım dosyasında E kolonu (5. kolon) yok.")
+    varlik_col = yat.columns[4]
+
+    merged = ist.merge(puan[["Kod", puan_col]].rename(columns={puan_col: "Puan"}), on="Kod", how="left")
+    merged = merged.merge(
+        yat[["Kod", degisim_col, varlik_col]].rename(columns={degisim_col: "Yatırımları Artanlar Değişim (%)"}),
+        on="Kod",
+        how="left",
+    )
+
+    merged["Puan"] = pd.to_numeric(merged["Puan"], errors="coerce")
+    merged["Yatırımları Artanlar Değişim (%)"] = pd.to_numeric(
+        merged["Yatırımları Artanlar Değişim (%)"], errors="coerce"
+    )
+    merged[varlik_col] = pd.to_numeric(merged[varlik_col], errors="coerce")
+    merged = merged[merged[varlik_col] > min_varlik_orani]
+    merged = merged.sort_values("Puan", ascending=False, na_position="last").reset_index(drop=True)
+    return merged, varlik_col
+
 # Page configuration
 st.set_page_config(page_title="BIST Analysis App", layout="wide")
 
@@ -97,7 +272,7 @@ st.set_page_config(page_title="BIST Analysis App", layout="wide")
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Sayfa Seçiniz:",
-    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation", "Bist30-Full", "Kontrat-Tum", "Msci Full", "Euro", "Gold"]
+    ["BIST Data Analysis", "MSCI Para Akışı Analizi", "BIST30 Para Akışı", "Sektörel Analiz", "BIST30 Hacim Analizi", "BIST30 Correlation", "Bist30-Full", "Kontrat-Tum", "Msci Full", "Euro", "Gold", "Temel Data"]
 )
 
 # Page 1: BIST Data Analysis (from app.py)
@@ -2115,3 +2290,64 @@ elif page == "Gold":
                         file_name=f"Gold_{zaman_araligi}.json",
                         mime="application/json"
                     )
+
+# Page 10: Temel Data
+elif page == "Temel Data":
+    st.title("Temel Data")
+    st.write(
+        "İstikrarlı şirketler tablosunu baz alır; puanlama ve yatırım dosyalarından seçilen kolonları `Kod` üzerinden birleştirir. "
+        "Yatırım dosyasının E kolonundaki varlık oranı **5’ten büyük** olan satırlar kalır ve tablo **Puan**’a göre azalan sıralanır."
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        istikrarli_file = st.file_uploader(
+            "İstikrarlı Şirketler",
+            type=["xlsx"],
+            key="temel_istikrarli",
+        )
+    with col2:
+        yatirim_file = st.file_uploader(
+            "Yatırımda Öne Çıkanlar",
+            type=["xlsx"],
+            key="temel_yatirim",
+        )
+    with col3:
+        puanlama_file = st.file_uploader(
+            "Puanlama",
+            type=["xlsx"],
+            key="temel_puanlama",
+        )
+
+    merge_clicked = st.button("Tabloları Birleştir", type="primary", disabled=not (istikrarli_file and yatirim_file and puanlama_file))
+
+    if merge_clicked:
+        try:
+            istikrarli_df = read_uploaded_excel(istikrarli_file)
+            yatirim_df = read_uploaded_excel(yatirim_file)
+            puanlama_df = read_uploaded_excel(puanlama_file)
+            result_df, varlik_col = merge_temel_data(istikrarli_df, yatirim_df, puanlama_df)
+            st.session_state["temel_data_result"] = result_df
+            st.session_state["temel_data_varlik_col"] = varlik_col
+        except Exception as exc:
+            st.session_state.pop("temel_data_result", None)
+            st.error(f"Birleştirme başarısız: {exc}")
+
+    result_df = st.session_state.get("temel_data_result")
+    if isinstance(result_df, pd.DataFrame):
+        varlik_col = st.session_state.get("temel_data_varlik_col", "E kolonu")
+        st.caption(f"{len(result_df)} şirket • filtre: `{varlik_col}` > 5 • sıralama: Puan azalan")
+        st.dataframe(result_df, use_container_width=True)
+
+        excel_buffer = io.BytesIO()
+        result_df.to_excel(excel_buffer, index=False, engine="openpyxl")
+        excel_buffer.seek(0)
+        st.download_button(
+            label="Excel olarak indir",
+            data=excel_buffer.getvalue(),
+            file_name="temel_data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="temel_data_download",
+        )
+    elif not (istikrarli_file and yatirim_file and puanlama_file):
+        st.info("Üç Excel dosyasını da yükledikten sonra birleştirmeyi çalıştırın.")
