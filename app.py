@@ -262,7 +262,7 @@ def merge_temel_data(istikrarli_df, yatirim_df, puanlama_df, min_varlik_orani=5)
     )
     merged[varlik_col] = pd.to_numeric(merged[varlik_col], errors="coerce")
     merged = merged[merged[varlik_col] > min_varlik_orani]
-    merged = merged.sort_values("Puan", ascending=False, na_position="last").reset_index(drop=True)
+    merged = merged.sort_values("Sharpe Net Kar Marjı", ascending=False, na_position="last").reset_index(drop=True)
     return merged, varlik_col
 
 # Page configuration
